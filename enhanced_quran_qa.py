@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
-Enhanced Qur'an QA System for Shared Task 2024
-==============================================
+Enhanced Qur'an QA System with Matryoshka Semantic Layers
+========================================================
 
-This enhanced system provides a complete solution for the Qur'an QA shared task,
-including advanced retrieval methods, better ranking algorithms, and comprehensive
-evaluation capabilities.
+This enhanced system implements a multi-layered semantic representation approach
+using Matryoshka layers to capture different levels of meaning:
+- Literal layer: Direct word meanings
+- Cultural layer: Cultural and historical context
+- Theological layer: Religious and spiritual meanings
+- Interpretive layer: Scholarly interpretations
+- Contextual layer: Situational and contextual meanings
 """
 
 import json
 import logging
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, NamedTuple
 from pathlib import Path
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -19,6 +23,8 @@ from sentence_transformers import SentenceTransformer
 import torch
 from transformers import AutoTokenizer, AutoModel
 import pandas as pd
+from dataclasses import dataclass
+from enum import Enum
 
 from quran_qa_system import QuranQASystem, Source, Question
 from data_loader import DataLoader
@@ -27,274 +33,400 @@ from data_loader import DataLoader
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class EnhancedQuranQASystem(QuranQASystem):
+class SemanticLayer(Enum):
+    """Enumeration of semantic layers in the Matryoshka approach"""
+    LITERAL = "literal"
+    CULTURAL = "cultural"
+    THEOLOGICAL = "theological"
+    INTERPRETIVE = "interpretive"
+    CONTEXTUAL = "contextual"
+
+@dataclass
+class MatryoshkaEmbedding:
+    """Represents multi-layered embeddings for semantic analysis"""
+    literal_embedding: np.ndarray
+    cultural_embedding: np.ndarray
+    theological_embedding: np.ndarray
+    interpretive_embedding: np.ndarray
+    contextual_embedding: np.ndarray
+    
+    def get_layer_embedding(self, layer: SemanticLayer) -> np.ndarray:
+        """Get embedding for a specific semantic layer"""
+        layer_map = {
+            SemanticLayer.LITERAL: self.literal_embedding,
+            SemanticLayer.CULTURAL: self.cultural_embedding,
+            SemanticLayer.THEOLOGICAL: self.theological_embedding,
+            SemanticLayer.INTERPRETIVE: self.interpretive_embedding,
+            SemanticLayer.CONTEXTUAL: self.contextual_embedding
+        }
+        return layer_map[layer]
+
+class MatryoshkaSemanticAnalyzer:
     """
-    Enhanced Qur'an QA system with advanced features
+    Analyzes text using multiple semantic layers in a Matryoshka approach
     """
     
-    def __init__(self, 
-                 quran_data_path: str = None, 
-                 hadith_data_path: str = None,
-                 use_embeddings: bool = True,
-                 model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"):
+    def __init__(self, model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"):
+        self.model_name = model_name
+        self.sentence_model = SentenceTransformer(model_name)
+        
+        # Layer-specific prompts for semantic transformation
+        self.layer_prompts = {
+            SemanticLayer.LITERAL: "Literal meaning: ",
+            SemanticLayer.CULTURAL: "Cultural and historical context: ",
+            SemanticLayer.THEOLOGICAL: "Religious and spiritual meaning: ",
+            SemanticLayer.INTERPRETIVE: "Scholarly interpretation: ",
+            SemanticLayer.CONTEXTUAL: "Situational context: "
+        }
+        
+        # Islamic-specific semantic mappings
+        self.islamic_semantic_mappings = {
+            'الله': {
+                SemanticLayer.LITERAL: 'God',
+                SemanticLayer.CULTURAL: 'The divine being in Islamic tradition',
+                SemanticLayer.THEOLOGICAL: 'The one and only God, creator of all',
+                SemanticLayer.INTERPRETIVE: 'The absolute, transcendent deity',
+                SemanticLayer.CONTEXTUAL: 'The object of worship and devotion'
+            },
+            'الصلاة': {
+                SemanticLayer.LITERAL: 'prayer',
+                SemanticLayer.CULTURAL: 'Islamic ritual prayer',
+                SemanticLayer.THEOLOGICAL: 'Direct communication with Allah',
+                SemanticLayer.INTERPRETIVE: 'Spiritual discipline and worship',
+                SemanticLayer.CONTEXTUAL: 'Prescribed daily worship'
+            },
+            'الزكاة': {
+                SemanticLayer.LITERAL: 'charity',
+                SemanticLayer.CULTURAL: 'Islamic almsgiving',
+                SemanticLayer.THEOLOGICAL: 'Purification of wealth',
+                SemanticLayer.INTERPRETIVE: 'Social responsibility and justice',
+                SemanticLayer.CONTEXTUAL: 'Obligatory giving to the poor'
+            },
+            'الحج': {
+                SemanticLayer.LITERAL: 'pilgrimage',
+                SemanticLayer.CULTURAL: 'Annual Islamic pilgrimage to Mecca',
+                SemanticLayer.THEOLOGICAL: 'Spiritual journey and submission',
+                SemanticLayer.INTERPRETIVE: 'Unity of the Muslim community',
+                SemanticLayer.CONTEXTUAL: 'Once-in-lifetime obligation'
+            }
+        }
+    
+    def create_matryoshka_embedding(self, text: str) -> MatryoshkaEmbedding:
         """
-        Initialize the enhanced system
+        Create multi-layered embeddings for the given text
         
         Args:
-            quran_data_path: Path to Qur'anic passages data
-            hadith_data_path: Path to Sahih Bukhari Hadiths data
-            use_embeddings: Whether to use sentence embeddings for retrieval
-            model_name: Name of the sentence transformer model to use
+            text: Input text to analyze
+            
+        Returns:
+            MatryoshkaEmbedding with embeddings for each semantic layer
         """
-        super().__init__(quran_data_path, hadith_data_path)
+        # Generate layer-specific versions of the text
+        layer_texts = self._generate_layer_texts(text)
         
-        self.use_embeddings = use_embeddings
-        self.model_name = model_name
+        # Create embeddings for each layer
+        embeddings = {}
+        for layer, layer_text in layer_texts.items():
+            embeddings[layer] = self.sentence_model.encode([layer_text])[0]
         
-        # Initialize sentence transformer for semantic similarity
-        if self.use_embeddings:
-            try:
-                self.sentence_model = SentenceTransformer(model_name)
-                logger.info(f"Loaded sentence transformer model: {model_name}")
-            except Exception as e:
-                logger.warning(f"Could not load sentence transformer: {e}")
-                self.use_embeddings = False
-        
-        # Enhanced retrieval engine
-        self.enhanced_retriever = EnhancedRetrievalEngine(self.use_embeddings, self.sentence_model)
-        
-        # Load data using the data loader
-        self.data_loader = DataLoader()
-        self._load_data()
+        return MatryoshkaEmbedding(
+            literal_embedding=embeddings[SemanticLayer.LITERAL],
+            cultural_embedding=embeddings[SemanticLayer.CULTURAL],
+            theological_embedding=embeddings[SemanticLayer.THEOLOGICAL],
+            interpretive_embedding=embeddings[SemanticLayer.INTERPRETIVE],
+            contextual_embedding=embeddings[SemanticLayer.CONTEXTUAL]
+        )
     
-    def _load_data(self):
-        """Load Qur'an and Hadith data"""
-        if not self.quran_sources:
-            # Try to load from sample data first
-            try:
-                self.quran_sources, self.hadith_sources = self.data_loader.create_sample_data()
-                logger.info("Loaded sample data")
-            except Exception as e:
-                logger.error(f"Error loading sample data: {e}")
+    def _generate_layer_texts(self, text: str) -> Dict[SemanticLayer, str]:
+        """
+        Generate layer-specific versions of the input text
         
-        logger.info(f"Loaded {len(self.quran_sources)} Qur'anic sources")
-        logger.info(f"Loaded {len(self.hadith_sources)} Hadith sources")
+        Args:
+            text: Original text
+            
+        Returns:
+            Dictionary mapping each semantic layer to its specific text version
+        """
+        layer_texts = {}
+        
+        # Literal layer - direct translation/meaning
+        layer_texts[SemanticLayer.LITERAL] = f"{self.layer_prompts[SemanticLayer.LITERAL]}{text}"
+        
+        # Cultural layer - add cultural context
+        cultural_context = self._add_cultural_context(text)
+        layer_texts[SemanticLayer.CULTURAL] = f"{self.layer_prompts[SemanticLayer.CULTURAL]}{cultural_context}"
+        
+        # Theological layer - add religious meaning
+        theological_context = self._add_theological_context(text)
+        layer_texts[SemanticLayer.THEOLOGICAL] = f"{self.layer_prompts[SemanticLayer.THEOLOGICAL]}{theological_context}"
+        
+        # Interpretive layer - add scholarly interpretation
+        interpretive_context = self._add_interpretive_context(text)
+        layer_texts[SemanticLayer.INTERPRETIVE] = f"{self.layer_prompts[SemanticLayer.INTERPRETIVE]}{interpretive_context}"
+        
+        # Contextual layer - add situational context
+        contextual_context = self._add_contextual_context(text)
+        layer_texts[SemanticLayer.CONTEXTUAL] = f"{self.layer_prompts[SemanticLayer.CONTEXTUAL]}{contextual_context}"
+        
+        return layer_texts
     
-    def retrieve_sources(self, question: Question, max_results: int = 20) -> List[Source]:
+    def _add_cultural_context(self, text: str) -> str:
+        """Add cultural and historical context to the text"""
+        # Add cultural context based on Islamic terms
+        cultural_additions = []
+        
+        islamic_terms = ['الله', 'محمد', 'القرآن', 'الصلاة', 'الزكاة', 'الحج', 'رمضان']
+        for term in islamic_terms:
+            if term in text:
+                cultural_additions.append(f"in Islamic tradition and culture")
+                break
+        
+        if cultural_additions:
+            return f"{text} {' '.join(cultural_additions)}"
+        return text
+    
+    def _add_theological_context(self, text: str) -> str:
+        """Add religious and spiritual context to the text"""
+        theological_additions = []
+        
+        # Check for theological terms
+        theological_terms = ['الله', 'الإيمان', 'الإسلام', 'العبادة', 'الجنة', 'النار']
+        for term in theological_terms:
+            if term in text:
+                theological_additions.append("in religious and spiritual context")
+                break
+        
+        if theological_additions:
+            return f"{text} {' '.join(theological_additions)}"
+        return text
+    
+    def _add_interpretive_context(self, text: str) -> str:
+        """Add scholarly interpretation context to the text"""
+        interpretive_additions = []
+        
+        # Check for terms that have scholarly interpretations
+        interpretive_terms = ['القرآن', 'الحديث', 'الشريعة', 'الفقه']
+        for term in interpretive_terms:
+            if term in text:
+                interpretive_additions.append("as interpreted by Islamic scholars")
+                break
+        
+        if interpretive_additions:
+            return f"{text} {' '.join(interpretive_additions)}"
+        return text
+    
+    def _add_contextual_context(self, text: str) -> str:
+        """Add situational and contextual meaning to the text"""
+        contextual_additions = []
+        
+        # Check for contextual terms
+        contextual_terms = ['كيف', 'متى', 'أين', 'لماذا']
+        for term in contextual_terms:
+            if term in text:
+                contextual_additions.append("in specific situations and contexts")
+                break
+        
+        if contextual_additions:
+            return f"{text} {' '.join(contextual_additions)}"
+        return text
+    
+    def calculate_layer_similarity(self, 
+                                 embedding1: MatryoshkaEmbedding, 
+                                 embedding2: MatryoshkaEmbedding,
+                                 layer_weights: Optional[Dict[SemanticLayer, float]] = None) -> float:
         """
-        Enhanced retrieval using multiple methods
+        Calculate weighted similarity across all semantic layers
+        
+        Args:
+            embedding1: First Matryoshka embedding
+            embedding2: Second Matryoshka embedding
+            layer_weights: Optional weights for each layer
+            
+        Returns:
+            Weighted similarity score
         """
-        # Use enhanced retriever
-        quran_candidates = self.enhanced_retriever.retrieve_quran(question, self.quran_sources)
-        hadith_candidates = self.enhanced_retriever.retrieve_hadith(question, self.hadith_sources)
+        if layer_weights is None:
+            # Default weights - emphasize theological and interpretive layers for Islamic texts
+            layer_weights = {
+                SemanticLayer.LITERAL: 0.15,
+                SemanticLayer.CULTURAL: 0.20,
+                SemanticLayer.THEOLOGICAL: 0.25,
+                SemanticLayer.INTERPRETIVE: 0.25,
+                SemanticLayer.CONTEXTUAL: 0.15
+            }
         
-        # Combine candidates
-        all_candidates = quran_candidates + hadith_candidates
+        similarities = {}
+        for layer in SemanticLayer:
+            emb1 = embedding1.get_layer_embedding(layer)
+            emb2 = embedding2.get_layer_embedding(layer)
+            similarities[layer] = cosine_similarity([emb1], [emb2])[0][0]
         
-        if not all_candidates:
-            logger.info("No relevant sources found for the question")
-            return []
+        # Calculate weighted average
+        weighted_similarity = sum(
+            similarities[layer] * layer_weights[layer] 
+            for layer in SemanticLayer
+        )
         
-        # Enhanced ranking
-        ranked_sources = self.enhanced_ranker.rank_sources(question, all_candidates)
-        
-        return ranked_sources[:max_results]
+        return weighted_similarity
 
-class EnhancedRetrievalEngine:
-    """Enhanced retrieval engine with multiple methods"""
+class MatryoshkaRetrievalEngine:
+    """Enhanced retrieval engine using Matryoshka semantic layers"""
     
-    def __init__(self, use_embeddings: bool = True, sentence_model = None):
-        self.use_embeddings = use_embeddings
-        self.sentence_model = sentence_model
-        
-        # TF-IDF vectorizer
+    def __init__(self, semantic_analyzer: MatryoshkaSemanticAnalyzer):
+        self.semantic_analyzer = semantic_analyzer
         self.tfidf_vectorizer = TfidfVectorizer(
             max_features=5000,
             ngram_range=(1, 3),
             min_df=2
         )
         
-        # BM25-like scoring
-        self.bm25_k1 = 1.2
-        self.bm25_b = 0.75
+        # Store Matryoshka embeddings for sources
+        self.quran_matryoshka_embeddings = {}
+        self.hadith_matryoshka_embeddings = {}
+    
+    def precompute_source_embeddings(self, quran_sources: List[Source], hadith_sources: List[Source]):
+        """Precompute Matryoshka embeddings for all sources"""
+        logger.info("Precomputing Matryoshka embeddings for sources...")
         
-        # Pre-computed vectors
-        self.quran_vectors = None
-        self.hadith_vectors = None
-        self.quran_embeddings = None
-        self.hadith_embeddings = None
+        # Precompute Qur'an embeddings
+        for source in quran_sources:
+            self.quran_matryoshka_embeddings[source.id] = self.semantic_analyzer.create_matryoshka_embedding(source.text)
+        
+        # Precompute Hadith embeddings
+        for source in hadith_sources:
+            self.hadith_matryoshka_embeddings[source.id] = self.semantic_analyzer.create_matryoshka_embedding(source.text)
+        
+        logger.info(f"Precomputed embeddings for {len(self.quran_matryoshka_embeddings)} Qur'an sources and {len(self.hadith_matryoshka_embeddings)} Hadith sources")
     
     def retrieve_quran(self, question: Question, quran_sources: List[Source]) -> List[Source]:
-        """Retrieve relevant Qur'anic passages using multiple methods"""
+        """Retrieve relevant Qur'anic passages using Matryoshka semantic layers"""
         if not quran_sources:
             return []
         
         candidates = []
         
-        # Method 1: TF-IDF retrieval
-        tfidf_candidates = self._tfidf_retrieval(question, quran_sources, 'quran')
-        candidates.extend(tfidf_candidates)
+        # Create Matryoshka embedding for the question
+        question_embedding = self.semantic_analyzer.create_matryoshka_embedding(' '.join(question.keywords))
         
-        # Method 2: Semantic similarity (if embeddings available)
-        if self.use_embeddings and self.sentence_model:
-            semantic_candidates = self._semantic_retrieval(question, quran_sources, 'quran')
-            candidates.extend(semantic_candidates)
+        # Calculate similarities using Matryoshka approach
+        for source in quran_sources:
+            if source.id in self.quran_matryoshka_embeddings:
+                source_embedding = self.quran_matryoshka_embeddings[source.id]
+                
+                # Calculate weighted similarity across all layers
+                similarity = self.semantic_analyzer.calculate_layer_similarity(
+                    question_embedding, 
+                    source_embedding,
+                    self._get_quran_layer_weights(question)
+                )
+                
+                if similarity > 0.1:  # Threshold for relevance
+                    source.matryoshka_score = similarity
+                    candidates.append(source)
         
-        # Method 3: Keyword-based retrieval
-        keyword_candidates = self._keyword_retrieval(question, quran_sources)
-        candidates.extend(keyword_candidates)
-        
-        # Remove duplicates and sort by score
-        unique_candidates = self._remove_duplicates(candidates)
-        return sorted(unique_candidates, key=lambda x: x.score, reverse=True)
+        return sorted(candidates, key=lambda x: getattr(x, 'matryoshka_score', 0), reverse=True)
     
     def retrieve_hadith(self, question: Question, hadith_sources: List[Source]) -> List[Source]:
-        """Retrieve relevant Hadiths using multiple methods"""
+        """Retrieve relevant Hadiths using Matryoshka semantic layers"""
         if not hadith_sources:
             return []
         
         candidates = []
         
-        # Method 1: TF-IDF retrieval
-        tfidf_candidates = self._tfidf_retrieval(question, hadith_sources, 'hadith')
-        candidates.extend(tfidf_candidates)
+        # Create Matryoshka embedding for the question
+        question_embedding = self.semantic_analyzer.create_matryoshka_embedding(' '.join(question.keywords))
         
-        # Method 2: Semantic similarity
-        if self.use_embeddings and self.sentence_model:
-            semantic_candidates = self._semantic_retrieval(question, hadith_sources, 'hadith')
-            candidates.extend(semantic_candidates)
-        
-        # Method 3: Keyword-based retrieval
-        keyword_candidates = self._keyword_retrieval(question, hadith_sources)
-        candidates.extend(keyword_candidates)
-        
-        # Remove duplicates and sort by score
-        unique_candidates = self._remove_duplicates(candidates)
-        return sorted(unique_candidates, key=lambda x: x.score, reverse=True)
-    
-    def _tfidf_retrieval(self, question: Question, sources: List[Source], source_type: str) -> List[Source]:
-        """TF-IDF based retrieval"""
-        if not sources:
-            return []
-        
-        # Create TF-IDF vectors
-        texts = [source.text for source in sources]
-        vectors = self.tfidf_vectorizer.fit_transform(texts)
-        
-        # Create question vector
-        question_text = ' '.join(question.keywords)
-        question_vector = self.tfidf_vectorizer.transform([question_text])
-        
-        # Calculate similarities
-        similarities = cosine_similarity(question_vector, vectors).flatten()
-        
-        # Create candidates
-        candidates = []
-        for i, source in enumerate(sources):
-            if similarities[i] > 0.1:  # Threshold
-                source.score = similarities[i]
-                candidates.append(source)
-        
-        return candidates
-    
-    def _semantic_retrieval(self, question: Question, sources: List[Source], source_type: str) -> List[Source]:
-        """Semantic similarity based retrieval"""
-        if not self.sentence_model or not sources:
-            return []
-        
-        try:
-            # Get embeddings for sources
-            source_texts = [source.text for source in sources]
-            source_embeddings = self.sentence_model.encode(source_texts)
-            
-            # Get embedding for question
-            question_text = ' '.join(question.keywords)
-            question_embedding = self.sentence_model.encode([question_text])
-            
-            # Calculate similarities
-            similarities = cosine_similarity(question_embedding, source_embeddings).flatten()
-            
-            # Create candidates
-            candidates = []
-            for i, source in enumerate(sources):
-                if similarities[i] > 0.3:  # Higher threshold for semantic similarity
-                    source.semantic_score = similarities[i]
+        # Calculate similarities using Matryoshka approach
+        for source in hadith_sources:
+            if source.id in self.hadith_matryoshka_embeddings:
+                source_embedding = self.hadith_matryoshka_embeddings[source.id]
+                
+                # Calculate weighted similarity across all layers
+                similarity = self.semantic_analyzer.calculate_layer_similarity(
+                    question_embedding, 
+                    source_embedding,
+                    self._get_hadith_layer_weights(question)
+                )
+                
+                if similarity > 0.1:  # Threshold for relevance
+                    source.matryoshka_score = similarity
                     candidates.append(source)
-            
-            return candidates
-            
-        except Exception as e:
-            logger.error(f"Error in semantic retrieval: {e}")
-            return []
+        
+        return sorted(candidates, key=lambda x: getattr(x, 'matryoshka_score', 0), reverse=True)
     
-    def _keyword_retrieval(self, question: Question, sources: List[Source]) -> List[Source]:
-        """Keyword-based retrieval"""
-        candidates = []
-        question_keywords = set(question.keywords)
-        
-        for source in sources:
-            source_words = set(source.text.split())
-            
-            # Calculate keyword overlap
-            overlap = len(question_keywords.intersection(source_words))
-            if overlap > 0:
-                source.keyword_score = overlap / len(question_keywords) if question_keywords else 0
-                candidates.append(source)
-        
-        return candidates
+    def _get_quran_layer_weights(self, question: Question) -> Dict[SemanticLayer, float]:
+        """Get layer weights for Qur'an retrieval based on question type"""
+        if question.question_type == 'factoid':
+            # For factoid questions, emphasize literal and cultural layers
+            return {
+                SemanticLayer.LITERAL: 0.25,
+                SemanticLayer.CULTURAL: 0.25,
+                SemanticLayer.THEOLOGICAL: 0.20,
+                SemanticLayer.INTERPRETIVE: 0.20,
+                SemanticLayer.CONTEXTUAL: 0.10
+            }
+        else:
+            # For non-factoid questions, emphasize theological and interpretive layers
+            return {
+                SemanticLayer.LITERAL: 0.15,
+                SemanticLayer.CULTURAL: 0.20,
+                SemanticLayer.THEOLOGICAL: 0.25,
+                SemanticLayer.INTERPRETIVE: 0.25,
+                SemanticLayer.CONTEXTUAL: 0.15
+            }
     
-    def _remove_duplicates(self, candidates: List[Source]) -> List[Source]:
-        """Remove duplicate sources and combine scores"""
-        unique_sources = {}
-        
-        for candidate in candidates:
-            if candidate.id not in unique_sources:
-                unique_sources[candidate.id] = candidate
-            else:
-                # Combine scores from different methods
-                existing = unique_sources[candidate.id]
-                existing.score = max(getattr(existing, 'score', 0), getattr(candidate, 'score', 0))
-                existing.semantic_score = max(getattr(existing, 'semantic_score', 0), 
-                                           getattr(candidate, 'semantic_score', 0))
-                existing.keyword_score = max(getattr(existing, 'keyword_score', 0), 
-                                          getattr(candidate, 'keyword_score', 0))
-        
-        return list(unique_sources.values())
+    def _get_hadith_layer_weights(self, question: Question) -> Dict[SemanticLayer, float]:
+        """Get layer weights for Hadith retrieval based on question type"""
+        if question.question_type == 'factoid':
+            # For factoid questions, emphasize literal and cultural layers
+            return {
+                SemanticLayer.LITERAL: 0.20,
+                SemanticLayer.CULTURAL: 0.30,
+                SemanticLayer.THEOLOGICAL: 0.20,
+                SemanticLayer.INTERPRETIVE: 0.20,
+                SemanticLayer.CONTEXTUAL: 0.10
+            }
+        else:
+            # For non-factoid questions, emphasize interpretive and contextual layers
+            return {
+                SemanticLayer.LITERAL: 0.15,
+                SemanticLayer.CULTURAL: 0.20,
+                SemanticLayer.THEOLOGICAL: 0.20,
+                SemanticLayer.INTERPRETIVE: 0.25,
+                SemanticLayer.CONTEXTUAL: 0.20
+            }
 
-class EnhancedRankingEngine:
-    """Enhanced ranking engine with multiple criteria"""
+class MatryoshkaRankingEngine:
+    """Enhanced ranking engine using Matryoshka semantic layers"""
     
-    def __init__(self):
+    def __init__(self, semantic_analyzer: MatryoshkaSemanticAnalyzer):
+        self.semantic_analyzer = semantic_analyzer
         self.ranking_weights = {
-            'tfidf_score': 0.25,
-            'semantic_score': 0.35,
-            'keyword_score': 0.20,
-            'entity_match': 0.10,
-            'source_type_preference': 0.10
+            'matryoshka_score': 0.5,
+            'keyword_overlap': 0.2,
+            'entity_match': 0.2,
+            'source_type_preference': 0.1
         }
     
     def rank_sources(self, question: Question, candidates: List[Source]) -> List[Source]:
-        """Enhanced ranking with multiple criteria"""
+        """Rank sources using Matryoshka semantic analysis"""
         for candidate in candidates:
-            score = self._calculate_enhanced_score(question, candidate)
+            score = self._calculate_matryoshka_score(question, candidate)
             candidate.final_score = score
         
         return sorted(candidates, key=lambda x: x.final_score, reverse=True)
     
-    def _calculate_enhanced_score(self, question: Question, source: Source) -> float:
-        """Calculate enhanced composite score"""
+    def _calculate_matryoshka_score(self, question: Question, source: Source) -> float:
+        """Calculate composite score using Matryoshka semantic analysis"""
         scores = {}
         
-        # TF-IDF score
-        scores['tfidf_score'] = getattr(source, 'score', 0.0)
+        # Matryoshka semantic score
+        scores['matryoshka_score'] = getattr(source, 'matryoshka_score', 0.0)
         
-        # Semantic similarity score
-        scores['semantic_score'] = getattr(source, 'semantic_score', 0.0)
+        # Keyword overlap
+        scores['keyword_overlap'] = self._calculate_keyword_overlap(question, source)
         
-        # Keyword overlap score
-        scores['keyword_score'] = getattr(source, 'keyword_score', 0.0)
-        
-        # Entity match score
+        # Entity match
         scores['entity_match'] = self._calculate_entity_match(question, source)
         
         # Source type preference
@@ -307,6 +439,17 @@ class EnhancedRankingEngine:
         )
         
         return final_score
+    
+    def _calculate_keyword_overlap(self, question: Question, source: Source) -> float:
+        """Calculate keyword overlap between question and source"""
+        question_keywords = set(question.keywords)
+        source_words = set(source.text.split())
+        
+        if not question_keywords:
+            return 0.0
+        
+        overlap = len(question_keywords.intersection(source_words))
+        return overlap / len(question_keywords)
     
     def _calculate_entity_match(self, question: Question, source: Source) -> float:
         """Calculate entity match score"""
@@ -321,147 +464,145 @@ class EnhancedRankingEngine:
     
     def _calculate_source_preference(self, question: Question, source: Source) -> float:
         """Calculate source type preference score"""
-        # Enhanced preference logic
-        theological_keywords = ['الله', 'القرآن', 'الإيمان', 'الإسلام', 'العبادة', 'الصلاة', 'الزكاة']
-        practical_keywords = ['كيف', 'متى', 'أين', 'أي', 'كم']
+        theological_keywords = ['الله', 'القرآن', 'الإيمان', 'الإسلام', 'العبادة']
         
-        question_text = question.text.lower()
-        
-        # Prefer Qur'an for theological questions
-        if any(keyword in question_text for keyword in theological_keywords):
-            return 1.0 if source.source_type == 'quran' else 0.3
-        
-        # Prefer Hadith for practical questions
-        elif any(keyword in question_text for keyword in practical_keywords):
-            return 0.8 if source.source_type == 'hadith' else 0.4
-        
-        # Neutral preference for other questions
-        return 0.5
+        if question.question_type == 'factoid':
+            return 0.5  # Neutral preference
+        else:
+            if any(keyword in question.text for keyword in theological_keywords):
+                return 1.0 if source.source_type == 'quran' else 0.3
+            else:
+                return 0.5
 
-class EvaluationEngine:
-    """Evaluation engine for the Qur'an QA system"""
+class MatryoshkaQuranQASystem(QuranQASystem):
+    """
+    Enhanced Qur'an QA system with Matryoshka semantic layers
+    """
     
-    def __init__(self):
-        self.metrics = {}
-    
-    def evaluate_system(self, system: EnhancedQuranQASystem, test_questions: List[Dict]) -> Dict:
+    def __init__(self, 
+                 quran_data_path: str = None, 
+                 hadith_data_path: str = None,
+                 model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"):
         """
-        Evaluate the system performance
+        Initialize the Matryoshka-enhanced system
         
         Args:
-            system: The QA system to evaluate
-            test_questions: List of test questions with ground truth
+            quran_data_path: Path to Qur'anic passages data
+            hadith_data_path: Path to Sahih Bukhari Hadiths data
+            model_name: Name of the sentence transformer model to use
+        """
+        super().__init__(quran_data_path, hadith_data_path)
+        
+        # Initialize Matryoshka semantic analyzer
+        self.semantic_analyzer = MatryoshkaSemanticAnalyzer(model_name)
+        
+        # Enhanced retrieval and ranking engines
+        self.matryoshka_retriever = MatryoshkaRetrievalEngine(self.semantic_analyzer)
+        self.matryoshka_ranker = MatryoshkaRankingEngine(self.semantic_analyzer)
+        
+        # Load data using the data loader
+        self.data_loader = DataLoader()
+        self._load_data()
+        
+        # Precompute embeddings if data is available
+        if self.quran_sources or self.hadith_sources:
+            self.matryoshka_retriever.precompute_source_embeddings(self.quran_sources, self.hadith_sources)
+    
+    def _load_data(self):
+        """Load Qur'an and Hadith data"""
+        if not self.quran_sources:
+            try:
+                self.quran_sources, self.hadith_sources = self.data_loader.create_sample_data()
+                logger.info("Loaded sample data")
+            except Exception as e:
+                logger.error(f"Error loading sample data: {e}")
+        
+        logger.info(f"Loaded {len(self.quran_sources)} Qur'anic sources")
+        logger.info(f"Loaded {len(self.hadith_sources)} Hadith sources")
+    
+    def retrieve_sources(self, question: Question, max_results: int = 20) -> List[Source]:
+        """
+        Enhanced retrieval using Matryoshka semantic layers
+        """
+        # Use Matryoshka retriever
+        quran_candidates = self.matryoshka_retriever.retrieve_quran(question, self.quran_sources)
+        hadith_candidates = self.matryoshka_retriever.retrieve_hadith(question, self.hadith_sources)
+        
+        # Combine candidates
+        all_candidates = quran_candidates + hadith_candidates
+        
+        if not all_candidates:
+            logger.info("No relevant sources found for the question")
+            return []
+        
+        # Rank using Matryoshka approach
+        ranked_sources = self.matryoshka_ranker.rank_sources(question, all_candidates)
+        
+        return ranked_sources[:max_results]
+    
+    def analyze_semantic_layers(self, text: str) -> Dict[SemanticLayer, float]:
+        """
+        Analyze the semantic layer distribution of a text
+        
+        Args:
+            text: Text to analyze
             
         Returns:
-            Dictionary with evaluation metrics
+            Dictionary with confidence scores for each semantic layer
         """
-        results = {
-            'precision': [],
-            'recall': [],
-            'f1_score': [],
-            'mrr': [],
-            'has_answer_accuracy': []
-        }
+        embedding = self.semantic_analyzer.create_matryoshka_embedding(text)
         
-        for test_case in test_questions:
-            question = test_case['question']
-            ground_truth = test_case.get('ground_truth', [])
-            has_answer = test_case.get('has_answer', True)
-            
-            # Get system response
-            response = system.answer_question(question)
-            
-            # Calculate metrics
-            precision, recall, f1 = self._calculate_retrieval_metrics(response, ground_truth)
-            mrr = self._calculate_mrr(response, ground_truth)
-            has_answer_acc = self._calculate_has_answer_accuracy(response, has_answer)
-            
-            results['precision'].append(precision)
-            results['recall'].append(recall)
-            results['f1_score'].append(f1)
-            results['mrr'].append(mrr)
-            results['has_answer_accuracy'].append(has_answer_acc)
+        # Calculate layer-specific characteristics
+        layer_analysis = {}
+        for layer in SemanticLayer:
+            layer_embedding = embedding.get_layer_embedding(layer)
+            # Use embedding magnitude as a proxy for layer strength
+            layer_analysis[layer] = float(np.linalg.norm(layer_embedding))
         
-        # Calculate averages
-        avg_results = {}
-        for metric in results:
-            avg_results[f'avg_{metric}'] = np.mean(results[metric])
-        
-        return avg_results
+        return layer_analysis
     
-    def _calculate_retrieval_metrics(self, response: Dict, ground_truth: List[str]) -> Tuple[float, float, float]:
-        """Calculate precision, recall, and F1 score"""
-        predicted_ids = [source['id'] for source in response['sources']]
-        ground_truth_ids = ground_truth
+    def get_layer_explanation(self, question: Question, source: Source) -> Dict[SemanticLayer, str]:
+        """
+        Get explanations for why a source was selected based on each semantic layer
         
-        if not ground_truth_ids:
-            return 0.0, 0.0, 0.0
+        Args:
+            question: The original question
+            source: The selected source
+            
+        Returns:
+            Dictionary with explanations for each semantic layer
+        """
+        question_embedding = self.semantic_analyzer.create_matryoshka_embedding(' '.join(question.keywords))
+        source_embedding = self.semantic_analyzer.create_matryoshka_embedding(source.text)
         
-        # Calculate precision and recall
-        relevant_retrieved = len(set(predicted_ids) & set(ground_truth_ids))
+        explanations = {}
+        for layer in SemanticLayer:
+            emb1 = question_embedding.get_layer_embedding(layer)
+            emb2 = source_embedding.get_layer_embedding(layer)
+            similarity = cosine_similarity([emb1], [emb2])[0][0]
+            
+            explanations[layer] = f"Layer similarity: {similarity:.3f}"
         
-        precision = relevant_retrieved / len(predicted_ids) if predicted_ids else 0.0
-        recall = relevant_retrieved / len(ground_truth_ids) if ground_truth_ids else 0.0
-        
-        # Calculate F1 score
-        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-        
-        return precision, recall, f1
-    
-    def _calculate_mrr(self, response: Dict, ground_truth: List[str]) -> float:
-        """Calculate Mean Reciprocal Rank"""
-        if not ground_truth:
-            return 0.0
-        
-        for i, source in enumerate(response['sources']):
-            if source['id'] in ground_truth:
-                return 1.0 / (i + 1)
-        
-        return 0.0
-    
-    def _calculate_has_answer_accuracy(self, response: Dict, ground_truth_has_answer: bool) -> float:
-        """Calculate accuracy for has_answer prediction"""
-        return 1.0 if response['has_answer'] == ground_truth_has_answer else 0.0
+        return explanations
 
 def main():
-    """Main function to demonstrate the enhanced system"""
+    """Main function to demonstrate the Matryoshka-enhanced system"""
     
-    # Initialize the enhanced system
-    system = EnhancedQuranQASystem(use_embeddings=True)
+    # Initialize the Matryoshka-enhanced system
+    system = MatryoshkaQuranQASystem()
     
     # Test questions
     test_questions = [
-        {
-            "question": "ما هي أركان الإسلام الخمسة؟",
-            "expected_type": "factoid",
-            "expected_keywords": ["أركان", "الإسلام", "خمسة"]
-        },
-        {
-            "question": "من هو النبي محمد؟",
-            "expected_type": "factoid",
-            "expected_keywords": ["النبي", "محمد"]
-        },
-        {
-            "question": "كيف نصلي؟",
-            "expected_type": "non-factoid",
-            "expected_keywords": ["كيف", "نصلي", "الصلاة"]
-        },
-        {
-            "question": "ما هي شروط الحج؟",
-            "expected_type": "non-factoid",
-            "expected_keywords": ["شروط", "الحج"]
-        },
-        {
-            "question": "هل يوجد إجابة لهذا السؤال في القرآن؟",
-            "expected_type": "non-factoid",
-            "expected_keywords": ["إجابة", "السؤال", "القرآن"]
-        }
+        "ما هي أركان الإسلام الخمسة؟",
+        "من هو النبي محمد؟",
+        "كيف نصلي؟",
+        "ما هي شروط الحج؟",
+        "هل يوجد إجابة لهذا السؤال في القرآن؟"
     ]
     
-    print("=== Enhanced Qur'an QA System Demo ===\n")
+    print("=== Matryoshka-Enhanced Qur'an QA System Demo ===\n")
     
-    for i, test_case in enumerate(test_questions, 1):
-        question = test_case["question"]
+    for i, question in enumerate(test_questions, 1):
         print(f"Test Case {i}: {question}")
         print("-" * 60)
         
@@ -470,6 +611,12 @@ def main():
         print(f"Question Type: {processed_question.question_type}")
         print(f"Keywords: {', '.join(processed_question.keywords)}")
         print(f"Entities: {', '.join(processed_question.entities)}")
+        
+        # Analyze semantic layers
+        layer_analysis = system.analyze_semantic_layers(question)
+        print(f"\nSemantic Layer Analysis:")
+        for layer, score in layer_analysis.items():
+            print(f"  {layer.value}: {score:.3f}")
         
         # Get answer
         result = system.answer_question(question)
@@ -480,34 +627,35 @@ def main():
             for j, source in enumerate(result['sources'][:3]):  # Show top 3
                 print(f"{j+1}. [{source['source_type'].upper()}] {source['text'][:80]}...")
                 print(f"   Score: {source.get('relevance_score', 0.0):.3f}")
+                
+                # Get layer explanations for the top source
+                if j == 0:
+                    explanations = system.get_layer_explanation(processed_question, Source(
+                        id=source['id'],
+                        text=source['text'],
+                        source_type=source['source_type']
+                    ))
+                    print(f"   Layer Explanations:")
+                    for layer, explanation in explanations.items():
+                        print(f"     {layer.value}: {explanation}")
         else:
             print("No relevant sources found.")
         
         print("\n" + "="*80 + "\n")
     
-    # Demonstrate evaluation
-    print("=== System Evaluation ===")
-    evaluator = EvaluationEngine()
-    
-    # Sample evaluation data
-    eval_data = [
-        {
-            "question": "ما هي أركان الإسلام الخمسة؟",
-            "ground_truth": ["hadith_2"],  # Hadith about pillars of Islam
-            "has_answer": True
-        },
-        {
-            "question": "كيف نصلي؟",
-            "ground_truth": ["hadith_1"],  # Hadith about prayer
-            "has_answer": True
-        }
+    # Demonstrate semantic layer analysis
+    print("=== Semantic Layer Analysis Demo ===")
+    sample_texts = [
+        "بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ",
+        "إنما الأعمال بالنيات",
+        "بني الإسلام على خمس"
     ]
     
-    # Run evaluation
-    eval_results = evaluator.evaluate_system(system, eval_data)
-    print("Evaluation Results:")
-    for metric, value in eval_results.items():
-        print(f"{metric}: {value:.3f}")
+    for text in sample_texts:
+        print(f"\nText: {text}")
+        layer_analysis = system.analyze_semantic_layers(text)
+        for layer, score in layer_analysis.items():
+            print(f"  {layer.value}: {score:.3f}")
 
 if __name__ == "__main__":
     main()
