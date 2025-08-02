@@ -1,0 +1,25 @@
+# Core dependencies for Qur'an QA System
+numpy>=1.21.0
+pandas>=1.3.0
+scikit-learn>=1.0.0
+torch>=1.9.0
+transformers>=4.20.0
+sentence-transformers>=2.2.0
+
+# Arabic text processing
+arabic-reshaper>=2.1.0
+python-bidi>=0.4.2
+
+# Natural language processing
+nltk>=3.6.0
+
+# Data handling
+requests>=2.25.0
+
+# Optional: For better Arabic text processing
+# camel-tools>=1.0.0  # If available
+# pyarabic>=0.6.0     # If available
+
+# Development and testing
+pytest>=6.0.0
+pytest-cov>=2.10.0
